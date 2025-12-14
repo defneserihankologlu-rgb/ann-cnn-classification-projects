@@ -1,6 +1,6 @@
 
 
-## ✅ ** README.md**
+##  README.md
 
 ````markdown
 # ANN & CNN Classification Projects (TensorFlow / Keras)
@@ -128,6 +128,3 @@ pip install -r requirements.txt
 ## License
 
 This project is intended for educational and academic use.
-
-Hazırsan “README’yi ekledim” de, son kontrolü yapalım 👌
-```
