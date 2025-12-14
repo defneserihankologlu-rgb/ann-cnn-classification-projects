@@ -1,0 +1,275 @@
+import kagglehub
+import os
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, classification_report
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+# Download latest version
+print("Downloading dataset...")
+path = kagglehub.dataset_download("ifeanyinneji/nike-adidas-shoes-for-image-classification-dataset")
+print("Path to dataset files:", path)
+
+# Load images and labels
+print("\nLoading images...")
+images = []
+labels = []
+
+# Get all image files
+image_extensions = ['.png', '.jpg', '.jpeg']
+image_files = []
+
+for root, dirs, files in os.walk(path):
+    for file in files:
+        if any(file.lower().endswith(ext) for ext in image_extensions):
+            image_files.append(os.path.join(root, file))
+
+print(f"Found {len(image_files)} images")
+
+# Debug: Show first few file paths to understand structure
+print("\nSample file paths (first 5):")
+for i, img_path in enumerate(image_files[:5]):
+    print(f"  {i+1}. {img_path}")
+
+# Process each image
+for img_path in image_files:
+    try:
+        # Load and preprocess image
+        img = Image.open(img_path).convert('RGB')
+        img = img.resize((128, 128))  # Resize to 128x128
+        img_array = np.array(img) / 255.0  # Normalize to [0, 1]
+        
+        # Extract label from path
+        # Get relative path from dataset root
+        rel_path = os.path.relpath(img_path, path)
+        path_lower = rel_path.lower()
+        path_parts = path_lower.split(os.sep)
+        
+        label = None
+        # Check each part of the path for 'nike' or 'adidas'
+        # Prioritize exact matches
+        for part in path_parts:
+            part_clean = part.strip().lower()
+            if part_clean == 'nike':
+                label = 'nike'
+                break
+            elif part_clean == 'adidas':
+                label = 'adidas'
+                break
+        
+        # If not found, check for partial matches
+        if label is None:
+            for part in path_parts:
+                if 'nike' in part and 'adidas' not in part:
+                    label = 'nike'
+                    break
+                elif 'adidas' in part:
+                    label = 'adidas'
+                    break
+        
+        # If still not found, check filename
+        if label is None:
+            filename = os.path.basename(img_path).lower()
+            if 'nike' in filename and 'adidas' not in filename:
+                label = 'nike'
+            elif 'adidas' in filename:
+                label = 'adidas'
+        
+        # Skip if can't determine label
+        if label is None:
+            print(f"Warning: Could not determine label for {img_path}, skipping...")
+            continue
+        
+        # Debug: Print first few label extractions
+        if len(images) < 5:
+            print(f"  Sample: {rel_path} -> Label: {label}")
+        
+        images.append(img_array)
+        labels.append(label)
+    except Exception as e:
+        print(f"Error loading {img_path}: {e}")
+        continue
+
+# Convert to numpy arrays
+X = np.array(images)
+y = np.array(labels)
+
+print(f"\nDataset shape: {X.shape}")
+print(f"Number of samples: {len(X)}")
+print(f"Number of unique labels: {len(np.unique(y))}")
+print(f"Label distribution:")
+if len(y) > 0:
+    unique, counts = np.unique(y, return_counts=True)
+    for label, count in zip(unique, counts):
+        print(f"  {label}: {count}")
+else:
+    print("  No labels found! Check the dataset structure.")
+    print("\nTrying to understand dataset structure...")
+    # Check directory structure
+    for root, dirs, files in os.walk(path):
+        level = root.replace(path, '').count(os.sep)
+        indent = ' ' * 2 * level
+        print(f"{indent}{os.path.basename(root)}/")
+        subindent = ' ' * 2 * (level + 1)
+        img_count = sum(1 for f in files if any(f.lower().endswith(ext) for ext in image_extensions))
+        if img_count > 0:
+            print(f"{subindent}[{img_count} image files]")
+    exit()
+
+# Encode labels
+le = LabelEncoder()
+y_encoded = le.fit_transform(y)
+print(f"\nEncoded classes: {le.classes_}")
+
+# Split the data: First train/test, then train/val
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
+)
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+)
+
+print(f"\nTraining samples: {len(X_train)}")
+print(f"Validation samples: {len(X_val)}")
+print(f"Test samples: {len(X_test)}")
+
+# Build a simple CNN model with 3 convolutional layers
+print("\nBuilding CNN model...")
+model = keras.Sequential([
+    # First convolutional layer
+    layers.Conv2D(32, (3, 3), activation='relu', input_shape=(128, 128, 3)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Second convolutional layer
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Third convolutional layer
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Global Average Pooling instead of Flatten (reduces parameters)
+    layers.GlobalAveragePooling2D(),
+    layers.Dense(64, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(1, activation='sigmoid')  # Binary classification: Nike (0) or Adidas (1)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+
+print("\nModel summary:")
+model.summary()
+
+# Data Augmentation
+print("\nSetting up data augmentation...")
+datagen = ImageDataGenerator(
+    rotation_range=10,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    zoom_range=0.1,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+datagen.fit(X_train)
+
+# Callbacks
+callbacks = [
+    keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=5,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=3,
+        min_lr=1e-7,
+        verbose=1
+    )
+]
+
+# Train the model
+print("\nTraining the model...")
+history = model.fit(
+    datagen.flow(X_train, y_train, batch_size=32),
+    epochs=50,
+    validation_data=(X_val, y_val),
+    callbacks=callbacks,
+    verbose=1
+)
+
+# Evaluate the model
+print("\nEvaluating the model...")
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Accuracy: {test_accuracy:.4f}")
+
+# Make predictions
+y_pred = model.predict(X_test, verbose=0)
+y_pred_classes = (y_pred > 0.5).astype(int).flatten()  # Binary classification threshold
+
+# Classification report
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred_classes, target_names=le.classes_))
+
+# Confusion Matrix
+print("\nGenerating Confusion Matrix...")
+cm = confusion_matrix(y_test, y_pred_classes)
+
+# Plot confusion matrix
+plt.figure(figsize=(10, 8))
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=le.classes_)
+disp.plot(cmap='Blues', values_format='d', ax=plt.gca())
+plt.title('Confusion Matrix - Nike vs Adidas Shoe Classification', fontsize=16, pad=20)
+plt.tight_layout()
+plt.savefig('confusion_matrix_nike_adidas.png', dpi=300, bbox_inches='tight')
+print("\nConfusion matrix saved as 'confusion_matrix_nike_adidas.png'")
+plt.show()
+
+# Find best epoch (lowest validation loss)
+val_losses = history.history['val_loss']
+best_epoch = np.argmin(val_losses)
+best_val_loss = val_losses[best_epoch]
+print(f"\nBest epoch: {best_epoch + 1} (val_loss: {best_val_loss:.4f})")
+
+# Plot training history
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Training Accuracy', linewidth=2)
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy', linewidth=2)
+plt.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.7, label=f'Best Epoch ({best_epoch + 1})')
+plt.xlabel('Epoch', fontsize=12)
+plt.ylabel('Accuracy', fontsize=12)
+plt.title('Model Accuracy', fontsize=14)
+plt.legend(fontsize=10)
+plt.grid(True, alpha=0.3)
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Training Loss', linewidth=2)
+plt.plot(history.history['val_loss'], label='Validation Loss', linewidth=2)
+plt.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.7, label=f'Best Epoch ({best_epoch + 1})')
+plt.scatter(best_epoch, best_val_loss, color='red', s=100, zorder=5, label=f'Best: {best_val_loss:.4f}')
+plt.xlabel('Epoch', fontsize=12)
+plt.ylabel('Loss', fontsize=12)
+plt.title('Model Loss', fontsize=14)
+plt.legend(fontsize=10)
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('training_history_nike_adidas.png', dpi=300, bbox_inches='tight')
+print("Training history saved as 'training_history_nike_adidas.png'")
+plt.show()
+
+print("\nModel training completed!")
